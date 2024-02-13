@@ -19,6 +19,7 @@ url = 'https://github.com/GERSL/pycold'
 tags = [ "github", "binpy", "cv2", "gdal"]
 mod_name = "pycold"
 repo_name = "pycold"
+pkg_name = "pycold-smart"
 rel_mod_parent_dpath = "src/python"
 os = [ 
     #"osx",
