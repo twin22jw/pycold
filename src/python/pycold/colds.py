@@ -1,4 +1,4 @@
-from ._colds_cython import _sccd_update, _sccd_detect, _obcold_reconstruct, _cold_detect
+from ._colds_cython import _sccd_update, _sccd_detect, _obcold_reconstruct, _cold_detect, _cold_detect_planet
 import numpy as np
 from .common import SccdOutput
 from ._param_validation import (
@@ -259,7 +259,101 @@ def cold_detect(
         gap_days,
     )
 
+def cold_detect_planet(
+    dates,
+    ts_b,
+    ts_g,
+    ts_r,
+    ts_n,
+    ts_s1,
+    ts_s2,
+    ts_t,
+    qas,
+    t_cg=15.0863,
+    pos=1,
+    conse=6,
+    b_output_cm=False,
+    starting_date=0,
+    n_cm=0,
+    cm_output_interval=0,
+    b_c2=False,
+    gap_days=365.25,
+):
+    """
+    pixel-based COLD algorithm.
+    Zhu, Z., Zhang, J., Yang, Z., Aljaddani, A. H., Cohen, W. B., Qiu, S., &
+    Zhou, C. (2020). Continuous monitoring of land disturbance based on Landsat time series.
+    Remote Sensing of Environment, 38, 111116.
+    Parameters
+    ----------
+    dates: 1d array of shape(observation numbers), list of ordinal dates
+    ts_b: 1d array of shape(observation numbers), time series of blue band.
+    ts_g: 1d array of shape(observation numbers), time series of green band
+    ts_r: 1d array of shape(observation numbers), time series of red band
+    ts_n: 1d array of shape(observation numbers), time series of nir band
+    ts_s1: 1d array of shape(observation numbers), time series of swir1 band
+    ts_s2: 1d array of shape(observation numbers), time series of swir2 band
+    ts_t: 1d array of shape(observation numbers), time series of thermal band
+    qas: 1d array, the QA cfmask bands. '0' - clear; '1' - water; '2' - shadow; '3' - snow; '4' - cloud
+    t_cg: threshold of change magnitude, default is chi2.ppf(0.99,5)
+    pos: position id of the pixel
+    conse: consecutive observation number
+    b_output_cm: bool, 'True' means outputting change magnitude and change magnitude dates, only for object-based COLD
+    starting_date: the starting date of the whole dataset to enable reconstruct CM_date, all pixels for a tile
+                    should have the same date, only for b_output_cm is True. Only b_output_cm == 'True'
+    n_cm: the length of outputted change magnitude. Only b_output_cm == 'True'
+    cm_output_interval: the temporal interval of outputting change magnitudes. Only b_output_cm == 'True'
+    b_c2: bool, a temporal parameter to indicate if collection 2. C2 needs ignoring thermal band for valid pixel
+          test due to the current low quality
+    gap_days: define the day number of the gap year for determining i_dense. Setting a large value (e.g., 1500)
+                if the gap year in the middle of the time range
 
+    Returns
+    ----------
+    change records: the COLD outputs that characterizes each temporal segment if b_output_cm==False
+    Or
+    [change records, cm_outputs, cm_outputs_date] if b_output_cm==True
+    """
+
+    _validate_params(
+        func_name="cold_detect_planet",
+        t_cg=t_cg,
+        pos=pos,
+        conse=conse,
+        b_output_cm=b_output_cm,
+        starting_date=starting_date,
+        n_cm=n_cm,
+        cm_output_interval=cm_output_interval,
+        b_c2=b_c2,
+        gap_days=gap_days,
+    )
+
+    # make sure it is c contiguous array and 64 bit
+    dates, ts_b, ts_g, ts_r, ts_n, ts_s1, ts_s2, ts_t, qas = _validate_data(
+        dates, ts_b, ts_g, ts_r, ts_n, ts_s1, ts_s2, ts_t, qas
+    )
+
+    return _cold_detect_planet(
+        dates,
+        ts_b,
+        ts_g,
+        ts_r,
+        ts_n,
+        ts_s1,
+        ts_s2,
+        ts_t,
+        qas,
+        t_cg,
+        pos,
+        conse,
+        b_output_cm,
+        starting_date,
+        n_cm,
+        cm_output_interval,
+        b_c2,
+        gap_days,
+    )
+    
 def obcold_reconstruct(
     dates, ts_b, ts_g, ts_r, ts_n, ts_s1, ts_s2, ts_t, qas, break_dates, pos=1, conse=6, b_c2=False
 ):

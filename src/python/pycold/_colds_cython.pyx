@@ -65,9 +65,9 @@ cdef extern from "../../cxx/output.h":
         float nrt_coefs[NRT_BAND][SCCD_NUM_C]
         float H[NRT_BAND]
         unsigned int rmse_sum[NRT_BAND]
-        short int norm_cm;
-        short int cm_angle;
-        unsigned char conse_last;
+        short int norm_cm
+        short int cm_angle
+        unsigned char conse_last
 
 cdef extern from "../../cxx/output.h":
     ctypedef struct Output_sccd_pinpoint:
@@ -84,7 +84,14 @@ cdef extern from "../../cxx/cold.h":
                   long *buf_t, long *fmask_buf, long *valid_date_array, int valid_num_scenes, int pos, 
                   double tcg, int conse, bool b_output_cm, int starting_date, bool b_c2, Output_t *rec_cg,
                   int *num_fc, int cm_output_interval, short int *cm_outputs,
-                  short int *cm_outputs_date, double gap_days);
+                  short int *cm_outputs_date, double gap_days)
+
+cdef extern from "../../cxx/cold_planet.h":
+    cdef int cold_planet(long *buf_b, long *buf_g, long *buf_r, long *buf_n, long *buf_s1, long *buf_s2,
+                  long *buf_t, long *fmask_buf, long *valid_date_array, int valid_num_scenes, int pos, 
+                  double tcg, int conse, bool b_output_cm, int starting_date, bool b_c2, Output_t *rec_cg,
+                  int *num_fc, int cm_output_interval, short int *cm_outputs,
+                  short int *cm_outputs_date, double gap_days)
 
 
 cdef extern from "../../cxx/cold.h":
@@ -218,7 +225,93 @@ cpdef _cold_detect(np.ndarray[np.int64_t, ndim=1, mode='c'] dates, np.ndarray[np
             else:  # for object-based COLD
                 return [rec_cg[:num_fc], cm_outputs, cm_outputs_date]
 
+cpdef _cold_detect_planet(np.ndarray[np.int64_t, ndim=1, mode='c'] dates, np.ndarray[np.int64_t, ndim=1, mode='c'] ts_b,
+                   np.ndarray[np.int64_t, ndim=1, mode='c'] ts_g, np.ndarray[np.int64_t, ndim=1, mode='c'] ts_r,
+                   np.ndarray[np.int64_t, ndim=1, mode='c'] ts_n, np.ndarray[np.int64_t, ndim=1, mode='c'] ts_s1,
+                   np.ndarray[np.int64_t, ndim=1, mode='c'] ts_s2, np.ndarray[np.int64_t, ndim=1, mode='c'] ts_t,
+                   np.ndarray[np.int64_t, ndim=1, mode='c'] qas, double t_cg = 11.3448, int pos=1, int conse=6,
+                   bint b_output_cm=False, int starting_date=0, int n_cm=0, int cm_output_interval=0, bint b_c2=True,
+                   double gap_days=365.25):
+    """
+    Helper function to run COLD algorithm on PlanetScope data.
 
+        Parameters
+        ----------
+        dates: 1d array of shape(observation numbers), list of ordinal dates
+        ts_b: 1d array of shape(observation numbers), time series of blue band.
+        ts_g: 1d array of shape(observation numbers), time series of green band
+        ts_r: 1d array of shape(observation numbers), time series of red band
+        ts_n: 1d array of shape(observation numbers), time series of nir band
+        ts_s1: 1d array of shape(observation numbers), time series of swir1 band
+        ts_s2: 1d array of shape(observation numbers), time series of swir2 band
+        ts_t: 1d array of shape(observation numbers), time series of thermal band
+        qas: 1d array, the QA cfmask bands. '0' - clear; '1' - water; '2' - shadow; '3' - snow; '4' - cloud
+        t_cg: threshold of change magnitude, default is chi2.ppf(0.99,3)
+        pos: position id of the pixel
+        conse: consecutive observation number
+        b_output_cm: bool, 'True' means outputting change magnitude and change magnitude dates, only for object-based COLD
+        starting_date: the starting date of the whole dataset to enable reconstruct CM_date,
+                    all pixels for a tile should have the same date, only for b_output_cm is True
+        b_c2: bool, a temporal parameter to indicate if collection 2. C2 needs ignoring thermal band for valid pixel test due to the current low quality
+        cm_output_interval: the temporal interval of outputting change magnitudes
+        gap_days: define the day number of the gap year for i_dense
+        Note that passing 2-d array to c as 2-d pointer does not work, so have to pass separate bands
+
+        Returns
+        ----------
+        change records: the COLD outputs that characterizes each temporal segment
+    """
+
+    cdef int valid_num_scenes = qas.shape[0]
+    # allocate memory for rec_cg
+    cdef int num_fc = 0
+    cdef Output_t t
+    rec_cg = np.zeros(NUM_FC, dtype=reccg_dt)
+
+    cdef long [:] dates_view = dates
+    cdef long [:] ts_b_view = ts_b
+    cdef long [:] ts_g_view = ts_g
+    cdef long [:] ts_r_view = ts_r
+    cdef long [:] ts_n_view = ts_n
+    cdef long [:] ts_s1_view = ts_s1
+    cdef long [:] ts_s2_view = ts_s2
+    cdef long [:] ts_t_view = ts_t
+    cdef long [:] qas_view = qas
+    cdef Output_t [:] rec_cg_view = rec_cg
+
+    # cm_outputs and cm_outputs_date are for object-based cold
+    if b_output_cm == True:
+        if cm_output_interval == 0:
+           cm_output_interval = 60
+        if starting_date == 0:
+           starting_date = dates[0]
+        if n_cm == 0:
+           n_cm = math.ceil((dates[valid_num_scenes-1] - starting_date + 1) / cm_output_interval) + 1
+        cm_outputs = np.full(n_cm, -9999, dtype=np.short)
+        cm_outputs_date = np.full(n_cm, -9999, dtype=np.short)
+    # set the length to 1 to save memory, as they won't be assigned values
+    else:
+        cm_outputs = np.full(1, -9999, dtype=np.short)
+        cm_outputs_date = np.full(1, -9999, dtype=np.short)
+    cdef short [:] cm_outputs_view = cm_outputs  # memory view
+    cdef short [:] cm_outputs_date_view = cm_outputs_date  # memory view
+
+    result = cold_planet(&ts_b_view[0], &ts_g_view[0], &ts_r_view[0], &ts_n_view[0], &ts_s1_view[0], &ts_s2_view[0], &ts_t_view[0],
+                 &qas_view[0], &dates_view[0], valid_num_scenes, pos, t_cg, conse, b_output_cm,
+                 starting_date, b_c2, &rec_cg_view[0], &num_fc, cm_output_interval, &cm_outputs_view[0], &cm_outputs_date_view[0],
+                 gap_days)
+    if result != 0:
+        raise RuntimeError("cold function fails for pos = {} ".format(pos))
+    else:
+        if num_fc <= 0:
+            raise Exception("The COLD function has no change records outputted for pos = {} (possibly due to no enough clear observation)".format(pos))
+        else:
+            if b_output_cm == False:
+                return rec_cg[:num_fc] # np.asarray uses also the buffer-protocol and is able to construct
+                                                             # a dtype-object from cython's array
+            else:  # for object-based COLD
+                return [rec_cg[:num_fc], cm_outputs, cm_outputs_date]
+                
 cpdef _obcold_reconstruct(np.ndarray[np.int64_t, ndim=1, mode='c'] dates,
                           np.ndarray[np.int64_t, ndim=1, mode='c'] ts_b,
                           np.ndarray[np.int64_t, ndim=1, mode='c'] ts_g,
@@ -527,3 +620,4 @@ cpdef _sccd_update(sccd_pack,
             return SccdOutput(pos, np.array([]), min_rmse, nrt_mode, np.array([]), np.array([]))
         else:
             raise RuntimeError("No correct nrt_mode (mode={}) returned for pos = {} ".format(nrt_mode, pos))
+
